@@ -13,8 +13,8 @@ import (
 	"github.com/go-spatial/tegola/internal/env"
 	"github.com/go-spatial/tegola/internal/log"
 	"github.com/go-spatial/tegola/provider"
-	"github.com/jackc/pgproto3/v2"
-	"github.com/jackc/pgtype"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // isMVT will return true if the provider is MVT based
@@ -24,7 +24,6 @@ func isMVT(providerType string) bool {
 
 // genSQL will fill in the SQL field of a layer given a pool, and list of fields.
 func genSQL(l *Layer, pool *connectionPoolCollector, tblname string, flds []string, buffer bool, providerType string) (sql string, err error) {
-
 	// we need to hit the database to see what the fields are.
 	if len(flds) == 0 {
 		sql := fmt.Sprintf(fldsSQL, tblname)
@@ -201,7 +200,7 @@ func uppercaseTokens(str string) string {
 	return provider.ParameterTokenRegexp.ReplaceAllStringFunc(str, strings.ToUpper)
 }
 
-func transformVal(valType pgtype.OID, val interface{}) (interface{}, error) {
+func transformVal(valType uint32, val interface{}) (interface{}, error) {
 	switch valType {
 	default:
 		switch vt := val.(type) {
@@ -244,7 +243,7 @@ func transformVal(valType pgtype.OID, val interface{}) (interface{}, error) {
 }
 
 // decipherFields is responsible for processing the SQL result set, decoding geometries, ids and feature tags.
-func decipherFields(ctx context.Context, geomFieldname, idFieldname string, descriptions []pgproto3.FieldDescription, values []interface{}) (gid uint64, geom []byte, tags map[string]interface{}, err error) {
+func decipherFields(ctx context.Context, geomFieldname, idFieldname string, descriptions []pgconn.FieldDescription, values []interface{}) (gid uint64, geom []byte, tags map[string]interface{}, err error) {
 	var ok bool
 
 	tags = make(map[string]interface{})
@@ -292,14 +291,32 @@ func decipherFields(ctx context.Context, geomFieldname, idFieldname string, desc
 						tags[k] = v.String
 					}
 				}
+			case pgtype.Hstore:
+				for k, v := range vex {
+					// we need to check if the key already exists. if it does, then don't overwrite it
+					if _, ok := tags[k]; !ok {
+						tags[k] = *v
+					}
+				}
 			case pgtype.Numeric:
 				var num float64
-				vex.AssignTo(&num)
+				vex.Scan(&num)
+
 				tags[descName] = num
 			default:
-				value, err := transformVal(pgtype.OID(desc.DataTypeOID), values[i])
+				value, err := transformVal(desc.DataTypeOID, values[i])
 				if err != nil {
-					return gid, geom, tags, fmt.Errorf("unable to convert field [%v] (%v) of type (%v - %v) to a suitable value: %+v (%T)", i, descName, desc.DataTypeOID, pgtype.OID(desc.DataTypeOID), values[i], values[i])
+					return gid,
+						geom,
+						tags,
+						fmt.Errorf("unable to convert field [%v] (%v) of type (%v - %v) to a suitable value: %+v (%T)",
+							i,
+							descName,
+							desc.DataTypeOID,
+							desc.DataTypeOID,
+							values[i],
+							values[i],
+						)
 				}
 				tags[descName] = value
 			}
