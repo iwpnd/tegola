@@ -6,9 +6,9 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -70,7 +70,7 @@ func (c connectionPoolCollector) Collect(ch chan<- prometheus.Metric) {
 	)
 }
 
-func (c *connectionPoolCollector) Collectors(prefix string, _ func(configKey string) map[string]interface{}) ([]observability.Collector, error) {
+func (c *connectionPoolCollector) Collectors(prefix string, _ func(configKey string) map[string]any) ([]observability.Collector, error) {
 	if c == nil {
 		return nil, nil
 	}
@@ -316,11 +316,11 @@ func BuildDBConfig(opts *DBConfigOptions) (*pgxpool.Config, error) {
 
 	dbconfig.ConnConfig.RuntimeParams = opts.GetRuntimeParams()
 
-	var hstore uint32
+	var hstoreOID uint32
 
 	dbconfig.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
 		row := conn.QueryRow(ctx, "SELECT oid FROM pg_type WHERE typname = 'hstore';")
-		if err = row.Scan(&hstore); err != nil {
+		if err = row.Scan(&hstoreOID); err != nil {
 			switch {
 			case errors.Is(err, pgx.ErrNoRows):
 				// do nothing, because query can be empty if hstore is not installed
@@ -333,7 +333,7 @@ func BuildDBConfig(opts *DBConfigOptions) (*pgxpool.Config, error) {
 		// dont register hstore data type if hstore extension is not installed
 		conn.TypeMap().RegisterType(&pgtype.Type{
 			Name:  "hstore",
-			OID:   hstore,
+			OID:   hstoreOID,
 			Codec: pgtype.HstoreCodec{},
 		})
 
@@ -617,7 +617,7 @@ func ConfigTLS(sslMode string, sslKey string, sslCert string, sslRootCert string
 	if sslRootCert != "" {
 		caCertPool := x509.NewCertPool()
 
-		caCert, err := ioutil.ReadFile(sslRootCert)
+		caCert, err := os.ReadFile(sslRootCert)
 		if err != nil {
 			return fmt.Errorf("unable to read CA file (%q): %w", sslRootCert, err)
 		}

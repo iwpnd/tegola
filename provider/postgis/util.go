@@ -200,7 +200,7 @@ func uppercaseTokens(str string) string {
 	return provider.ParameterTokenRegexp.ReplaceAllStringFunc(str, strings.ToUpper)
 }
 
-func transformVal(valType uint32, val interface{}) (interface{}, error) {
+func transformVal(valType uint32, val any) (interface{}, error) {
 	switch valType {
 	default:
 		switch vt := val.(type) {
@@ -243,10 +243,15 @@ func transformVal(valType uint32, val interface{}) (interface{}, error) {
 }
 
 // decipherFields is responsible for processing the SQL result set, decoding geometries, ids and feature tags.
-func decipherFields(ctx context.Context, geomFieldname, idFieldname string, descriptions []pgconn.FieldDescription, values []interface{}) (gid uint64, geom []byte, tags map[string]interface{}, err error) {
+func decipherFields(
+	ctx context.Context,
+	geomFieldname, idFieldname string,
+	descriptions []pgconn.FieldDescription,
+	values []any,
+) (gid uint64, geom []byte, tags map[string]any, err error) {
 	var ok bool
 
-	tags = make(map[string]interface{})
+	tags = make(map[string]any)
 
 	var idParsed bool
 	for i := range values {
@@ -285,22 +290,34 @@ func decipherFields(ctx context.Context, geomFieldname, idFieldname string, desc
 		default:
 			switch vex := values[i].(type) {
 			case map[string]pgtype.Text:
-				for k, v := range vex {
+				for key, value := range vex {
 					// we need to check if the key already exists. if it does, then don't overwrite it
-					if _, ok := tags[k]; !ok {
-						tags[k] = v.String
+					if _, ok := tags[key]; !ok {
+						tags[key] = value
+					} else {
+						log.Warnf("tag %s already exists", key)
 					}
 				}
 			case pgtype.Hstore:
-				for k, v := range vex {
+				for key, ptr := range vex {
+					value := ""
+					if ptr != nil {
+						value = *ptr
+					}
+
 					// we need to check if the key already exists. if it does, then don't overwrite it
-					if _, ok := tags[k]; !ok {
-						tags[k] = *v
+					if _, ok := tags[key]; !ok {
+						tags[key] = value
+					} else {
+						log.Warnf("tag %s already exists", key)
 					}
 				}
 			case pgtype.Numeric:
 				var num float64
-				vex.Scan(&num)
+				err := vex.Scan(&num)
+				if err != nil {
+					return 0, nil, nil, fmt.Errorf("unable to scan numeric field (%v) into float64", vex)
+				}
 
 				tags[descName] = num
 			default:
@@ -326,7 +343,7 @@ func decipherFields(ctx context.Context, geomFieldname, idFieldname string, desc
 	return gid, geom, tags, nil
 }
 
-func gId(v interface{}) (gid uint64, err error) {
+func gId(v any) (gid uint64, err error) {
 	switch aval := v.(type) {
 	case float64:
 		return uint64(aval), nil
